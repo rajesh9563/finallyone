@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dynamic Map with Responsive Filters</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Arial', sans-serif;
+    }
+
+    #map {
+      height: calc(100vh - 80px);
+      width: 100%;
+    }
+
+    .control-panel {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-color: #2d2d2d;
+      color: white;
+      padding: 10px;
+      flex-wrap: wrap;
+    }
+
+    .filter-section select {
+      padding: 8px;
+      border-radius: 4px;
+      border: none;
+      font-size: 14px;
+    }
+
+    .view-toggle {
+      cursor: pointer;
+      background: white;
+      color: #333;
+      padding: 8px 12px;
+      border-radius: 5px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .view-toggle:hover {
+      background-color: #4CAF50;
+      color: white;
+    }
+
+    .recenter-button {
+      position: absolute;
+      bottom: 80px;
+      right: 100px;
+      background: white;
+      border: 2px solid #4CAF50;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 1000;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .recenter-button:hover {
+      background: #4CAF50;
+      color: white;
+    }
+
+    #no-places-message {
+      display: none;
+      color: red;
+      text-align: center;
+      font-size: 16px;
+      margin-top: 5px;
+    }
+
+    /* Media Queries for Responsiveness */
+
+    @media (max-width: 1024px) {
+      .control-panel {
+        flex-direction: column;
+        text-align: center;
+      }
+
+      .filter-section select {
+        width: 100%;
+        margin-bottom: 10px;
+      }
+    }
+
+    @media (max-width: 768px) {
+      #map {
+        height: calc(100vh - 120px);
+      }
+
+      .view-toggle {
+        font-size: 12px;
+        padding: 6px 10px;
+      }
+
+      .recenter-button {
+        width: 45px;
+        height: 45px;
+        bottom: 15px;
+        right: 15px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .view-toggle {
+        font-size: 10px;
+        gap: 2px;
+      }
+
+      .recenter-button {
+        width: 40px;
+        height: 40px;
+        bottom: 10px;
+        right: 10px;
+      }
+
+      #map {
+        height: calc(100vh - 150px);
+      }
+
+      .control-panel {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .filter-section select {
+        font-size: 12px;
+        padding: 6px;
+      }
+    }
+
+    @media (min-width: 1200px) {
+      #map {
+        height: calc(100vh - 70px);
+      }
+
+      .view-toggle {
+        font-size: 16px;
+        padding: 10px 15px;
+      }
+
+      .recenter-button {
+        width: 60px;
+        height: 60px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="control-panel">
+    <div class="filter-section">
+      <label for="placeFilter">Filter:</label>
+      <select id="placeFilter" onchange="applyFilter()">
+        <option value="all">All</option>
+      </select>
+    </div>
+    <div class="view-toggle" onclick="toggleView()">
+      <i id="view-icon" class="fa-solid fa-map"></i> <span id="view-text">Satellite View</span>
+    </div>
+  </div>
+  <div id="no-places-message">No places found for this filter.</div>
+  <div id="map"></div>
+  <div class="recenter-button" onclick="recenterMap()" title="Recenter Map">
+    <i class="fa-solid fa-location-arrow"></i>
+  </div>
+
+  <script>
+    let map, userMarker, radiusCircle, userLat, userLng;
+    let allMarkers = [];
+    let placeTypes = new Set(['all']);
+    let isSatelliteView = false;
+
+    const defaultLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: 'Map data © OpenStreetMap contributors',
+    });
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; Esri',
+    });
+
+    const hybridLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; Esri',
+    });
+
+    const hybridLayer = L.layerGroup([satelliteLayer, hybridLabels]);
+
+    document.addEventListener('DOMContentLoaded', () => {
+      map = L.map('map', {
+        center: [0, 0],
+        zoom: 15,
+        layers: [defaultLayer],
+      });
+
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(
+          position => {
+            const { latitude, longitude } = position.coords;
+            updateUserLocation(latitude, longitude);
+          },
+          () => alert('Location permission denied.'),
+          { enableHighAccuracy: true }
+        );
+      }
+    });
+
+    function updateUserLocation(lat, lng) {
+      userLat = lat;
+      userLng = lng;
+
+      const position = [lat, lng];
+      map.setView(position);
+
+      if (!userMarker) {
+        userMarker = L.marker(position).addTo(map).bindPopup('You are here!');
+      } else {
+        userMarker.setLatLng(position);
+      }
+
+      if (!radiusCircle) {
+        radiusCircle = L.circle(position, { radius: 1000 }).addTo(map);
+      } else {
+        radiusCircle.setLatLng(position);
+      }
+
+      fetchNearbyPlaces(lat, lng);
+    }
+
+    function fetchNearbyPlaces(lat, lng) {
+      const query = `
+        [out:json];
+        (
+          node["amenity"](around:1000, ${lat}, ${lng});
+          node["shop"](around:1000, ${lat}, ${lng});
+        );
+        out body;`;
+
+      fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`)
+        .then(response => response.json())
+        .then(data => {
+          if (data.elements.length) {
+            addMarkers(data.elements);
+            updateFilterOptions();
+          }
+        });
+    }
+
+    function addMarkers(places) {
+      clearMarkers();
+      places.forEach(place => {
+        const type = capitalizeFirstLetter(place.tags.amenity || place.tags.shop || 'Other');
+        const marker = L.marker([place.lat, place.lon])
+          .bindPopup(`<b>${place.tags.name || 'Unnamed'}</b><br>Type: ${type}`)
+          .addTo(map);
+
+        marker.type = type;
+        allMarkers.push(marker);
+        placeTypes.add(type);
+
+        marker.on('mouseover', function () {
+          this.openPopup();
+        });
+
+        marker.on('mouseout', function () {
+          this.closePopup();
+        });
+      });
+    }
+
+    function capitalizeFirstLetter(string) {
+      return string.charAt(0).toUpperCase() + string.slice(1);
+    }
+
+    function clearMarkers() {
+      allMarkers.forEach(marker => marker.remove());
+      allMarkers = [];
+    }
+
+    function applyFilter() {
+      const selectedType = document.getElementById('placeFilter').value;
+      allMarkers.forEach(marker => {
+        if (selectedType === 'all' || marker.type === selectedType) {
+          marker.addTo(map);
+        } else {
+          map.removeLayer(marker);
+        }
+      });
+
+      const anyVisible = allMarkers.some(marker => marker._map);
+      document.getElementById('no-places-message').style.display = anyVisible ? 'none' : 'block';
+    }
+
+    function updateFilterOptions() {
+      const filterSelect = document.getElementById('placeFilter');
+      filterSelect.innerHTML = '<option value="all">All</option>';
+      placeTypes.forEach(type => {
+        const option = document.createElement('option');
+        option.value = type;
+        option.innerText = capitalizeFirstLetter(type);
+        filterSelect.appendChild(option);
+      });
+    }
+
+    function toggleView() {
+      if (isSatelliteView) {
+        map.removeLayer(hybridLayer);
+        map.addLayer(defaultLayer);
+        document.getElementById('view-icon').className = 'fa-solid fa-map';
+        document.getElementById('view-text').innerText = 'Satellite View';
+      } else {
+        map.removeLayer(defaultLayer);
+        map.addLayer(hybridLayer);
+        document.getElementById('view-icon').className = 'fa-solid fa-satellite';
+        document.getElementById('view-text').innerText = 'Default View';
+      }
+      isSatelliteView = !isSatelliteView;
+    }
+
+    function recenterMap() {
+      map.setView([userLat, userLng], 15);
+    }
+  </script>
+</body>
+</html>
